@@ -194,29 +194,54 @@ class TelegramPlugin extends Plugin {
             return;
         }
 
-        $ch = curl_init('https://api.telegram.org/bot' . $token . '/sendMessage');
+        $url = 'https://api.telegram.org/bot' . $token . '/sendMessage';
+        $ch = curl_init($url);
         if ($ch === false) {
             $this->logFailure('send', 'failed to initialize cURL');
             return;
         }
 
         try {
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 8);
+            $result = false;
+            $statusCode = 0;
+            for ($redirects = 0; $redirects < 4; $redirects++) {
+                if ($redirects > 0) {
+                    curl_close($ch);
+                    $ch = curl_init($url);
+                    if ($ch === false) {
+                        $this->logFailure('send', 'failed to initialize cURL');
+                        return;
+                    }
+                }
 
-            $result = curl_exec($ch);
-            if ($result === false) {
-                $this->logFailure('send', 'request failed: ' . curl_error($ch));
-                return;
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+                curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+                curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 8);
+
+                $result = curl_exec($ch);
+                if ($result === false) {
+                    $this->logFailure('send', 'request failed: ' . curl_error($ch));
+                    return;
+                }
+
+                $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                if (!in_array($statusCode, array(301, 302, 303, 307, 308), true)) {
+                    break;
+                }
+
+                $next = $this->telegramRedirect($url, (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL));
+                if ($next === '' || $next === $url) {
+                    break;
+                }
+                $url = $next;
             }
 
-            $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
             if ($statusCode !== 200) {
                 $description = $this->telegramError($result);
                 $this->logFailure('send', 'HTTP ' . $statusCode . ($description !== '' ? ' ' . $description : ''));
@@ -230,7 +255,9 @@ class TelegramPlugin extends Plugin {
             $this->logFailure('send', $e);
         } finally {
             try {
-                curl_close($ch);
+                if ($ch) {
+                    curl_close($ch);
+                }
             } catch (Throwable $e) {
                 $this->logFailure('send', $e);
             }
@@ -472,6 +499,34 @@ class TelegramPlugin extends Plugin {
 
     function isValidChatId($chatId) {
         return (bool) preg_match('/^(-?\d+|@[A-Za-z][A-Za-z0-9_]{4,31})$/', $chatId);
+    }
+
+    function telegramRedirect($current, $location) {
+        $location = trim($location);
+        if ($location === '') {
+            return '';
+        }
+
+        if (!preg_match('#^https?://#i', $location)) {
+            $parts = parse_url($current);
+            if (!is_array($parts) || empty($parts['host'])) {
+                return '';
+            }
+            $origin = (isset($parts['scheme']) ? $parts['scheme'] : 'https') . '://' . $parts['host'];
+            if (!empty($parts['port'])) {
+                $origin .= ':' . $parts['port'];
+            }
+            if ($location[0] !== '/') {
+                $path = isset($parts['path']) ? $parts['path'] : '/';
+                $location = rtrim(dirname($path), '/') . '/' . $location;
+            }
+            $location = $origin . $location;
+        }
+
+        if (strtolower((string) parse_url($location, PHP_URL_SCHEME)) !== 'https') {
+            return '';
+        }
+        return $location;
     }
 
     function telegramError($result) {
