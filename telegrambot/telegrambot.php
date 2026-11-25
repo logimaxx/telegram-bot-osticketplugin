@@ -226,7 +226,11 @@ class TelegramPlugin extends Plugin {
 
                 $result = curl_exec($ch);
                 if ($result === false) {
-                    $this->logFailure('send', 'request failed: ' . curl_error($ch));
+                    $message = 'request failed: ' . curl_error($ch);
+                    if ($debug) {
+                        $message .= ' url ' . $this->redactTelegramUrl($url);
+                    }
+                    $this->logFailure('send', $message);
                     return;
                 }
 
@@ -244,12 +248,16 @@ class TelegramPlugin extends Plugin {
 
             if ($statusCode !== 200) {
                 $description = $this->telegramError($result);
-                $this->logFailure('send', 'HTTP ' . $statusCode . ($description !== '' ? ' ' . $description : ''));
+                $message = 'HTTP ' . $statusCode . ($description !== '' ? ' ' . $description : '');
+                if ($debug) {
+                    $message .= ' url ' . $this->redactTelegramUrl($url);
+                }
+                $this->logFailure('send', $message);
                 return;
             }
 
             if ($debug) {
-                $this->logFailure('send', 'notification sent for ticket #' . $ticketNumber);
+                $this->logFailure('send', 'notification sent for ticket #' . $ticketNumber . ' url ' . $this->redactTelegramUrl($url));
             }
         } catch (Throwable $e) {
             $this->logFailure('send', $e);
@@ -499,6 +507,29 @@ class TelegramPlugin extends Plugin {
 
     function isValidChatId($chatId) {
         return (bool) preg_match('/^(-?\d+|@[A-Za-z][A-Za-z0-9_]{4,31})$/', $chatId);
+    }
+
+    function redactTelegramUrl($url) {
+        $safe = preg_replace_callback('#/bot([^/\s]+)#', function ($match) {
+            return '/bot' . $this->partialToken($match[1]);
+        }, (string) $url);
+        return is_string($safe) ? $safe : (string) $url;
+    }
+
+    function partialToken($token) {
+        $parts = explode(':', (string) $token, 2);
+        if (count($parts) === 2) {
+            return $parts[0] . ':' . $this->partialSecret($parts[1]);
+        }
+        return $this->partialSecret($token);
+    }
+
+    function partialSecret($secret) {
+        $secret = (string) $secret;
+        if (strlen($secret) <= 8) {
+            return $secret;
+        }
+        return substr($secret, 0, 4) . '…' . substr($secret, -4);
     }
 
     function telegramRedirect($current, $location) {
