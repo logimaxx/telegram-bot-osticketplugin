@@ -56,7 +56,6 @@ class TelegramPlugin extends Plugin {
         $config = $this->getConfig();
         $token = trim((string) $config->get('telegram-bot-token'));
         $chatId = trim((string) $config->get('telegram-chat-id'));
-        $includeBody = $this->isEnabled($config->get('telegram-include-body'));
         $debug = $this->isEnabled($config->get('debug'));
 
         if ($token === '' || $chatId === '') {
@@ -68,28 +67,59 @@ class TelegramPlugin extends Plugin {
             return;
         }
 
-        $ticketLink = $this->ticketUrl($ticket);
         $ticketNumber = method_exists($ticket, 'getNumber') ? (string) $ticket->getNumber() : '';
-        $title = (method_exists($ticket, 'getSubject') ? $ticket->getSubject() : '') ?: 'No subject';
-        $createdBy = trim(
-            (method_exists($ticket, 'getName') ? (string) $ticket->getName() : '')
-            . ' ('
-            . (method_exists($ticket, 'getEmail') ? (string) $ticket->getEmail() : '')
-            . ')'
-        );
-        $helpTopic = 'No help topic';
-        if (method_exists($ticket, 'getTopic') && $ticket->getTopic()) {
-            $helpTopic = $ticket->getTopic()->getName();
+        if (!$this->passesFilter($this->ticketTopicId($ticket), $config->get('telegram-topic-ids'), $config->get('telegram-topic-mode'))) {
+            if ($debug) {
+                $this->logFailure('filter', 'ticket #' . $ticketNumber . ' skipped by help topic filter');
+            }
+            return;
+        }
+        if (!$this->passesFilter($this->ticketDeptId($ticket), $config->get('telegram-dept-ids'), $config->get('telegram-dept-mode'))) {
+            if ($debug) {
+                $this->logFailure('filter', 'ticket #' . $ticketNumber . ' skipped by department filter');
+            }
+            return;
         }
 
-        $text = "<b>New Ticket:</b> <a href=\"" . $this->escapeHtml($ticketLink) . "\">#" . $this->escapeHtml($ticketNumber) . "</a>\n"
-            . "<b>Created by:</b> " . $this->escapeHtml($createdBy) . "\n"
-            . "<b>Subject:</b> " . $this->escapeHtml($title) . "\n"
-            . "<b>Help Topic:</b> " . $this->escapeHtml($helpTopic) . "\n";
+        $includeLink = $this->isEnabled($config->get('telegram-include-link'), true);
+        $includeName = $this->isEnabled($config->get('telegram-include-name'), true);
+        $includeEmail = $this->isEnabled($config->get('telegram-include-email'), true);
+        $includeSubject = $this->isEnabled($config->get('telegram-include-subject'), true);
+        $includeTopic = $this->isEnabled($config->get('telegram-include-topic'), true);
+        $includeBody = $this->isEnabled($config->get('telegram-include-body'));
+        $includeForm = $this->isEnabled($config->get('telegram-include-form'), true);
 
-        $formData = $this->getTicketFormData($ticket);
-        if ($formData !== '') {
-            $text .= "\n<b>Ticket Details:</b>\n" . $formData;
+        $ticketLink = $includeLink ? $this->ticketUrl($ticket) : '';
+        $number = $this->escapeHtml($ticketNumber);
+        if ($ticketLink !== '') {
+            $text = "<b>New Ticket:</b> <a href=\"" . $this->escapeHtml($ticketLink) . "\">#" . $number . "</a>\n";
+        } else {
+            $text = "<b>New Ticket:</b> #" . $number . "\n";
+        }
+
+        $createdBy = $this->requesterLine($ticket, $includeName, $includeEmail);
+        if ($createdBy !== '') {
+            $text .= "<b>Created by:</b> " . $this->escapeHtml($createdBy) . "\n";
+        }
+
+        if ($includeSubject) {
+            $title = (method_exists($ticket, 'getSubject') ? $ticket->getSubject() : '') ?: 'No subject';
+            $text .= "<b>Subject:</b> " . $this->escapeHtml($title) . "\n";
+        }
+
+        if ($includeTopic) {
+            $helpTopic = 'No help topic';
+            if (method_exists($ticket, 'getTopic') && $ticket->getTopic()) {
+                $helpTopic = $ticket->getTopic()->getName();
+            }
+            $text .= "<b>Help Topic:</b> " . $this->escapeHtml($helpTopic) . "\n";
+        }
+
+        if ($includeForm) {
+            $formData = $this->getTicketFormData($ticket, $this->formFieldAllowList($config->get('telegram-form-fields')));
+            if ($formData !== '') {
+                $text .= "\n<b>Ticket Details:</b>\n" . $formData;
+            }
         }
 
         if ($includeBody) {
@@ -193,7 +223,7 @@ class TelegramPlugin extends Plugin {
         }
     }
 
-    function getTicketFormData($ticket) {
+    function getTicketFormData($ticket, $allowedLabels = null) {
         $formData = '';
 
         try {
@@ -226,6 +256,9 @@ class TelegramPlugin extends Plugin {
                         $label = trim((string) $field->get('label'));
                         $value = trim($this->stringifyValue($answer->getValue()));
                         if ($label === '' || $value === '') {
+                            continue;
+                        }
+                        if (is_array($allowedLabels) && !isset($allowedLabels[$this->normalizeLabel($label)])) {
                             continue;
                         }
                         $formData .= '<b>' . $this->escapeHtml($label) . ':</b> ' . $this->escapeHtml($value) . "\n";
@@ -292,7 +325,130 @@ class TelegramPlugin extends Plugin {
         return rtrim(substr($text, 0, $max)) . "\n…";
     }
 
-    function isEnabled($value) {
+    function requesterLine($ticket, $includeName, $includeEmail) {
+        $name = '';
+        $email = '';
+        if ($includeName && method_exists($ticket, 'getName')) {
+            $name = trim((string) $ticket->getName());
+        }
+        if ($includeEmail && method_exists($ticket, 'getEmail')) {
+            $email = trim((string) $ticket->getEmail());
+        }
+        if ($name !== '' && $email !== '') {
+            return $name . ' (' . $email . ')';
+        }
+        if ($name !== '') {
+            return $name;
+        }
+        return $email;
+    }
+
+    function ticketTopicId($ticket) {
+        try {
+            if (method_exists($ticket, 'getTopicId')) {
+                return (string) $ticket->getTopicId();
+            }
+            if (method_exists($ticket, 'getTopic')) {
+                $topic = $ticket->getTopic();
+                if (is_object($topic) && method_exists($topic, 'getId')) {
+                    return (string) $topic->getId();
+                }
+            }
+        } catch (Throwable $e) {
+            $this->logFailure('filter', $e);
+        }
+        return '';
+    }
+
+    function ticketDeptId($ticket) {
+        try {
+            if (method_exists($ticket, 'getDeptId')) {
+                return (string) $ticket->getDeptId();
+            }
+            if (method_exists($ticket, 'getDept')) {
+                $dept = $ticket->getDept();
+                if (is_object($dept) && method_exists($dept, 'getId')) {
+                    return (string) $dept->getId();
+                }
+            }
+        } catch (Throwable $e) {
+            $this->logFailure('filter', $e);
+        }
+        return '';
+    }
+
+    function passesFilter($id, $selected, $mode) {
+        $keys = $this->choiceKeys($selected);
+        if (!$keys) {
+            return true;
+        }
+        $found = in_array((string) $id, $keys, true);
+        if ($this->filterMode($mode) === 'exclude') {
+            return !$found;
+        }
+        return $found;
+    }
+
+    function filterMode($value) {
+        if (is_array($value)) {
+            $keys = $this->choiceKeys($value);
+            $value = isset($keys[0]) ? $keys[0] : 'include';
+        }
+        return ((string) $value === 'exclude') ? 'exclude' : 'include';
+    }
+
+    function choiceKeys($value) {
+        if ($value === null || $value === '' || $value === false) {
+            return array();
+        }
+        if (!is_array($value)) {
+            return is_scalar($value) ? array((string) $value) : array();
+        }
+        if (!$value) {
+            return array();
+        }
+
+        $keys = array_keys($value);
+        $isList = ($keys === range(0, count($value) - 1));
+        $result = array();
+        foreach ($value as $key => $item) {
+            if ($isList) {
+                if (is_scalar($item) && (string) $item !== '') {
+                    $result[] = (string) $item;
+                }
+            } elseif ((string) $key !== '') {
+                $result[] = (string) $key;
+            }
+        }
+        return $result;
+    }
+
+    function formFieldAllowList($value) {
+        if (!is_string($value) || trim($value) === '') {
+            return null;
+        }
+        $allowed = array();
+        foreach (preg_split('/\r\n|\r|\n/', $value) as $line) {
+            $label = $this->normalizeLabel($line);
+            if ($label !== '') {
+                $allowed[$label] = true;
+            }
+        }
+        return $allowed ? $allowed : null;
+    }
+
+    function normalizeLabel($label) {
+        $label = trim((string) $label);
+        if (function_exists('mb_strtolower')) {
+            return mb_strtolower($label, 'UTF-8');
+        }
+        return strtolower($label);
+    }
+
+    function isEnabled($value, $default = false) {
+        if ($value === null || $value === '') {
+            return $default;
+        }
         return $value === true || $value === 1 || $value === '1';
     }
 

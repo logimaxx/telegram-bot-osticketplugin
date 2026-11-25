@@ -7,7 +7,7 @@ Install
 1. Clone this repo or download the zip file and place the contents into your `include/plugins` folder.
 2. Install the plugin in osTicket and open its configuration.
 3. Set **Bot Token** (from @BotFather) and **Chat ID** (user, group, channel id, or `@channelname`).
-4. Optionally enable **Include ticket message** and **Debug message in error.log**.
+4. Choose which help topics and departments send a notification, and which fields are included in the message. Leave the lists empty to send every new ticket.
 
 For more information about Telegram Bot, see: https://core.telegram.org/bots/api
 
