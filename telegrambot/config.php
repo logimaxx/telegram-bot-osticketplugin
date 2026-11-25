@@ -7,13 +7,22 @@ class TelegramPluginConfig extends PluginConfig {
         return array(
             'telegram' => new SectionBreakField(array(
                 'label' => 'Telegram Bot Notification',
+                'hint' => 'Create a bot with @BotFather, then paste the token and the destination chat here.',
             )),
-            'telegram-webhook-url' => new TextboxField(array(
-                'label' => 'Telegram Bot URL',
-                'configuration' => array('size'=>100, 'length'=>200),
+            'telegram-bot-token' => new TextboxField(array(
+                'label' => 'Bot Token',
+                'required' => true,
+                'hint' => 'Token from @BotFather, for example 123456789:AAExampleToken',
+                'configuration' => array('size'=>80, 'length'=>200),
+            )),
+            'telegram-chat-id' => new TextboxField(array(
+                'label' => 'Chat ID',
+                'required' => true,
+                'hint' => 'User, group, or channel id (for example -1001234567890), or a public @channelname',
+                'configuration' => array('size'=>40, 'length'=>64),
             )),
             'telegram-include-body' => new BooleanField(array(
-                'label' => 'Include Body',
+                'label' => 'Include ticket message',
                 'default' => 0,
             )),
             'debug' => new BooleanField(array(
