@@ -2,6 +2,23 @@
 
 require_once INCLUDE_DIR . 'class.plugin.php';
 
+class TelegramChoiceField extends ChoiceField {
+    function getChoices($verbose=false, $options=array()) {
+        if ($this->_choices === null || $verbose) {
+            $choices = $this->get('choices');
+            if (is_callable($choices)) {
+                try {
+                    $choices = call_user_func($choices);
+                } catch (Throwable $e) {
+                    $choices = array();
+                }
+            }
+            $this->_choices = is_array($choices) ? $choices : array();
+        }
+        return $this->_choices;
+    }
+}
+
 class TelegramPluginConfig extends PluginConfig {
     function getOptions() {
         return array(
@@ -41,9 +58,11 @@ class TelegramPluginConfig extends PluginConfig {
                 'default' => 'include',
                 'configuration' => array('multiselect' => false),
             )),
-            'telegram-topic-ids' => new ChoiceField(array(
+            'telegram-topic-ids' => new TelegramChoiceField(array(
                 'label' => 'Help topics',
-                'choices' => $this->helpTopicChoices(),
+                'choices' => function () {
+                    return $this->helpTopicChoices();
+                },
                 'configuration' => array('multiselect' => true),
                 'hint' => 'Applies only when at least one help topic is selected.',
             )),
@@ -56,9 +75,11 @@ class TelegramPluginConfig extends PluginConfig {
                 'default' => 'include',
                 'configuration' => array('multiselect' => false),
             )),
-            'telegram-dept-ids' => new ChoiceField(array(
+            'telegram-dept-ids' => new TelegramChoiceField(array(
                 'label' => 'Departments',
-                'choices' => $this->departmentChoices(),
+                'choices' => function () {
+                    return $this->departmentChoices();
+                },
                 'configuration' => array('multiselect' => true),
                 'hint' => 'Applies only when at least one department is selected.',
             )),
@@ -121,7 +142,7 @@ class TelegramPluginConfig extends PluginConfig {
     function departmentChoices() {
         try {
             if (class_exists('Dept') && method_exists('Dept', 'getDepartments')) {
-                $depts = Dept::getDepartments();
+                $depts = Dept::getDepartments(array('manager' => null));
                 if (is_array($depts)) {
                     return $depts;
                 }

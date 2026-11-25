@@ -20,18 +20,28 @@ class TelegramPlugin extends Plugin {
     var $config_class = "TelegramPluginConfig";
 
     function bootstrap() {
+        // osTicket side-loads this instance's config before bootstrap(), then
+        // clears it. A later getConfig() call builds an empty namespace and
+        // cannot see the saved token or chat id.
         try {
-            $this->runIsolated('bootstrap', function () {
+            $config = $this->getConfig();
+        } catch (Throwable $e) {
+            $this->logFailure('bootstrap', $e);
+            $config = null;
+        }
+
+        try {
+            $this->runIsolated('bootstrap', function () use ($config) {
                 require_once INCLUDE_DIR.'class.signal.php';
-                if (!class_exists('Signal', false)) {
+                if (!class_exists('Signal', false) || !is_object($config)) {
                     return;
                 }
 
                 $plugin = $this;
-                Signal::connect('ticket.created', function (...$args) use ($plugin) {
+                Signal::connect('ticket.created', function (...$args) use ($plugin, $config) {
                     try {
                         $ticket = (isset($args[0]) && is_object($args[0])) ? $args[0] : null;
-                        $plugin->onTicketCreated($ticket);
+                        $plugin->onTicketCreated($ticket, $config);
                     } catch (Throwable $e) {
                         $plugin->logFailure('ticket.created', $e);
                     }
@@ -42,18 +52,20 @@ class TelegramPlugin extends Plugin {
         }
     }
 
-    function onTicketCreated($ticket = null, $data = null) {
-        $this->runIsolated('ticket.created', function () use ($ticket) {
-            $this->deliverNotification($ticket);
+    function onTicketCreated($ticket = null, $config = null) {
+        $this->runIsolated('ticket.created', function () use ($ticket, $config) {
+            $this->deliverNotification($ticket, $config);
         });
     }
 
-    function deliverNotification($ticket) {
+    function deliverNotification($ticket, $config = null) {
         if (!is_object($ticket)) {
             return;
         }
-
-        $config = $this->getConfig();
+        if (!is_object($config)) {
+            $this->logFailure('ticket.created', 'notification skipped, plugin instance configuration was not loaded');
+            return;
+        }
         $token = trim((string) $config->get('telegram-bot-token'));
         $chatId = trim((string) $config->get('telegram-chat-id'));
         $debug = $this->isEnabled($config->get('debug'));
@@ -489,7 +501,8 @@ class TelegramPlugin extends Plugin {
                     return true;
                 }
                 $handling = true;
-                if ($severity & (E_WARNING | E_USER_WARNING | E_RECOVERABLE_ERROR | E_USER_ERROR)) {
+                $inPlugin = ($file !== '' && strpos((string) $file, __DIR__) === 0);
+                if ($inPlugin && ($severity & (E_WARNING | E_USER_WARNING | E_RECOVERABLE_ERROR | E_USER_ERROR))) {
                     $this->logFailure($label, $message . ' in ' . $file . ':' . $line);
                 }
                 $handling = false;
